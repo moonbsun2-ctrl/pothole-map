@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Road Repair Map (Prototype)</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  #map { height: 100%; }
+  #info {
+    position: absolute; z-index: 1000; top: 10px; left: 50px;
+    background: rgba(255,255,255,0.95); padding: 8px 12px;
+    border-radius: 6px; font: 14px sans-serif; box-shadow: 0 1px 5px rgba(0,0,0,0.3);
+  }
+</style>
+</head>
+<body>
+<div id="info"></div>
+<div id="map"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+var data = {"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.655266, 37.455237]}, "properties": {"type": "pothole", "time_s": 45.02, "max_jerk": 242.0, "peak_dev": 5.71}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.660496, 37.460488]}, "properties": {"type": "speed_bump", "time_s": 90.06, "max_jerk": 80.1, "peak_dev": 2.74}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.664002, 37.463984]}, "properties": {"type": "pothole", "time_s": 120.02, "max_jerk": 188.4, "peak_dev": 4.92}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.671926, 37.471902]}, "properties": {"type": "pothole", "time_s": 188.02, "max_jerk": 196.1, "peak_dev": 3.94}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.680293, 37.480336]}, "properties": {"type": "pothole", "time_s": 260.02, "max_jerk": 114.4, "peak_dev": 3.23}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.684997, 37.484987]}, "properties": {"type": "speed_bump", "time_s": 300.08, "max_jerk": 78.4, "peak_dev": 2.29}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.688651, 37.488609]}, "properties": {"type": "pothole", "time_s": 331.02, "max_jerk": 154.5, "peak_dev": 3.67}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.696898, 37.49689]}, "properties": {"type": "pothole", "time_s": 402.02, "max_jerk": 276.4, "peak_dev": 5.52}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.702473, 37.502507]}, "properties": {"type": "speed_bump", "time_s": 450.04, "max_jerk": 85.3, "peak_dev": 2.4}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.705388, 37.505386]}, "properties": {"type": "pothole", "time_s": 475.02, "max_jerk": 177.3, "peak_dev": 4.23}}, {"type": "Feature", "geometry": {"type": "Point", "coordinates": [128.713015, 37.513023]}, "properties": {"type": "pothole", "time_s": 540.02, "max_jerk": 163.1, "peak_dev": 3.67}}]};
+
+var map = L.map('map');
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19,
+  attribution: 'Tiles &copy; Esri'
+}).addTo(map);
+
+var potholes = L.layerGroup();
+var bumps = L.layerGroup();
+var nPothole = 0, nBump = 0;
+var points = [];
+
+data.features.forEach(function (f) {
+  var lat = f.geometry.coordinates[1];
+  var lon = f.geometry.coordinates[0];
+  var p = f.properties;
+  points.push([lat, lon]);
+  var isPothole = (p.type === 'pothole');
+  var marker = L.circleMarker([lat, lon], {
+    radius: isPothole ? 9 : 6,
+    color: isPothole ? '#b00020' : '#555555',
+    fillColor: isPothole ? '#e53935' : '#9e9e9e',
+    fillOpacity: 0.85,
+    weight: 2
+  });
+  marker.bindPopup(
+    '<b>' + (isPothole ? 'Pothole (repair needed)' : 'Speed bump (reference)') + '</b><br>' +
+    'Impact: ' + p.peak_dev + ' m/s²<br>' +
+    'Jerk: ' + p.max_jerk + '<br>' +
+    'Lat/Lon: ' + lat.toFixed(5) + ', ' + lon.toFixed(5)
+  );
+  if (isPothole) { marker.addTo(potholes); nPothole++; }
+  else { marker.addTo(bumps); nBump++; }
+});
+
+potholes.addTo(map);
+bumps.addTo(map);
+L.control.layers(null, {
+  'Pothole (red)': potholes,
+  'Speed bump (gray)': bumps
+}, { collapsed: false }).addTo(map);
+
+if (points.length > 0) { map.fitBounds(points, { padding: [40, 40] }); }
+else { map.setView([37.5, 128.7], 10); }
+
+document.getElementById('info').innerHTML =
+  '<b>Road Repair Map</b><br>Potholes: ' + nPothole + ' / Speed bumps: ' + nBump;
+</script>
+</body>
+</html>
