@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sensor Test</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; line-height: 1.6; }
+  button { font-size: 18px; padding: 12px 20px; margin: 6px 0; }
+  .box { background: #f2f2f2; padding: 10px 12px; border-radius: 8px; margin-top: 10px; }
+  .big { font-size: 24px; font-weight: bold; }
+  #log { color: #b00020; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h2>Sensor Test</h2>
+<button id="start">Start sensors</button>
+<div id="log"></div>
+
+<div class="box">
+  <b>Acceleration incl. gravity (m/s&sup2;)</b><br>
+  x: <span id="ax">-</span> / y: <span id="ay">-</span> / z: <span id="az">-</span><br>
+  Magnitude: <span id="mag" class="big">-</span>
+</div>
+
+<div class="box">
+  <b>Shock = |magnitude - 9.8|</b><br>
+  Now: <span id="dev">-</span> / Max: <span class="big" id="maxdev">-</span><br>
+  <button id="reset">Reset max</button>
+</div>
+
+<div class="box">
+  <b>Sampling rate</b>: <span id="hz">-</span> Hz
+</div>
+
+<div class="box">
+  <b>GPS</b><br>
+  Lat: <span id="lat">-</span><br>
+  Lon: <span id="lon">-</span><br>
+  Accuracy: <span id="acc">-</span> m / Speed: <span id="spd">-</span> km/h
+</div>
+
+<script>
+function $(id) { return document.getElementById(id); }
+
+var logEl = $('log');
+var count = 0;
+var lastRate = performance.now();
+var lastDraw = 0;
+var maxDev = 0;
+
+function onMotion(e) {
+  var a = e.accelerationIncludingGravity;
+  if (!a || a.x === null || a.y === null || a.z === null) { return; }
+
+  var mag = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+  var dev = Math.abs(mag - 9.8);
+  if (dev > maxDev) { maxDev = dev; }
+
+  count++;
+  var now = performance.now();
+
+  if (now - lastRate >= 1000) {
+    $('hz').textContent = Math.round(count * 1000 / (now - lastRate));
+    count = 0;
+    lastRate = now;
+  }
+
+  if (now - lastDraw >= 150) {   // 화면 갱신은 0.15초마다
+    lastDraw = now;
+    $('ax').textContent = a.x.toFixed(2);
+    $('ay').textContent = a.y.toFixed(2);
+    $('az').textContent = a.z.toFixed(2);
+    $('mag').textContent = mag.toFixed(2);
+    $('dev').textContent = dev.toFixed(2);
+    $('maxdev').textContent = maxDev.toFixed(2);
+  }
+}
+
+function onPosition(pos) {
+  $('lat').textContent = pos.coords.latitude.toFixed(6);
+  $('lon').textContent = pos.coords.longitude.toFixed(6);
+  $('acc').textContent = Math.round(pos.coords.accuracy);
+  $('spd').textContent = (pos.coords.speed === null)
+    ? '-' : (pos.coords.speed * 3.6).toFixed(1);
+}
+
+$('reset').addEventListener('click', function () {
+  maxDev = 0;
+  $('maxdev').textContent = '0.00';
+});
+
+$('start').addEventListener('click', function () {
+  logEl.textContent = '';
+
+  // 1) 모션 센서 (iPhone은 버튼을 누른 직후에 권한을 요청해야 함)
+  function startMotion() { window.addEventListener('devicemotion', onMotion); }
+
+  if (typeof DeviceMotionEvent !== 'undefined' &&
+      typeof DeviceMotionEvent.requestPermission === 'function') {
+    DeviceMotionEvent.requestPermission().then(function (state) {
+      if (state === 'granted') {
+        startMotion();
+      } else {
+        logEl.textContent += 'Motion permission was denied. ';
+      }
+    }).catch(function (err) {
+      logEl.textContent += 'Motion error: ' + err + ' ';
+    });
+  } else {
+    startMotion();
+  }
+
+  // 2) GPS
+  if (navigator.geolocation) {
+    navigator.geolocation.watchPosition(onPosition, function (err) {
+      logEl.textContent += 'GPS error: ' + err.message + ' ';
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+  } else {
+    logEl.textContent += 'GPS is not supported. ';
+  }
+});
+</script>
+</body>
+</html>
