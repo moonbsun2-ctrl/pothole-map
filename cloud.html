@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shock Detector (Cloud)</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; line-height: 1.6; }
+  button { font-size: 18px; padding: 12px 20px; margin: 6px 6px 6px 0; }
+  .box { background: #f2f2f2; padding: 10px 12px; border-radius: 8px; margin-top: 10px; }
+  .big { font-size: 22px; font-weight: bold; }
+  input[type=number] { font-size: 18px; width: 90px; padding: 4px; }
+  #log { color: #b00020; margin-top: 8px; }
+  #events div { border-bottom: 1px solid #ccc; padding: 6px 0; font-size: 15px; }
+  .pothole { color: #b00020; font-weight: bold; }
+  .bump { color: #555; font-weight: bold; }
+  .ok { color: #1b7f3b; }
+  .ng { color: #b00020; }
+</style>
+</head>
+<body>
+<h2>Shock Detector (Cloud)</h2>
+<button id="start">Start</button>
+<button id="test">Send test event</button>
+<button id="clear">Clear list</button>
+<div id="log"></div>
+
+<div class="box">
+  <b>Now</b><br>
+  Shock (|mag - baseline|): <span id="dev" class="big">-</span> m/s&sup2;<br>
+  Speed: <span id="spd">-</span> km/h / GPS accuracy: <span id="acc">-</span> m
+</div>
+
+<div class="box">
+  <b>Settings</b><br>
+  Shock threshold (m/s&sup2;): <input type="number" id="thr" value="2.0" step="0.1"><br>
+  Pothole jerk limit (m/s&sup3;): <input type="number" id="jt" value="100" step="10"><br>
+  <label><input type="checkbox" id="needspeed"> Ignore events below 10 km/h</label><br>
+  <label><input type="checkbox" id="cloud" checked> Send events to cloud</label>
+</div>
+
+<div class="box">
+  <b>Detected events</b> (<span id="n">0</span>)
+  <div id="events"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/12.11.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore-compat.js"></script>
+<script>
+function $(id) { return document.getElementById(id); }
+
+// ---------- Firebase ----------
+var firebaseConfig = {
+  apiKey: "AIzaSyAHI84U3RBBJcECRk8r7XI3DqtbNE87HAk",
+  authDomain: "pothole-map-b9230.firebaseapp.com",
+  projectId: "pothole-map-b9230",
+  storageBucket: "pothole-map-b9230.firebasestorage.app",
+  messagingSenderId: "927772375520",
+  appId: "1:927772375520:web:444f805586acbeef4cd385",
+  measurementId: "G-1C66EPZEC0"
+};
+
+var db = null;
+if (typeof firebase === 'undefined') {
+  $('log').textContent = 'Firebase library did not load. Check the network.';
+} else {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+  db.settings({ experimentalAutoDetectLongPolling: true, merge: true });
+}
+
+function sendToCloud(item) {
+  if (!$('cloud').checked) { item.cloud = 'off'; return; }
+  if (db === null) { item.cloud = 'failed: no Firebase'; return; }
+  if (item.lat === null) { item.cloud = 'not sent: no GPS'; return; }
+  item.cloud = 'sending...';
+  db.collection('events').add({
+    type: item.type,
+    lat: item.lat,
+    lon: item.lon,
+    accuracy: item.acc,
+    peak: item.peak,
+    jerk: item.jerk,
+    speed_kmh: item.speed_kmh,
+    test: !!item.test,
+    clientTime: item.time,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(function () {
+    item.cloud = 'sent';
+    render();
+  }).catch(function (err) {
+    item.cloud = 'failed: ' + err.message;
+    render();
+  });
+}
+
+// ---------- Detection ----------
+var TAU = 1.0;          // 기준선(baseline)을 따라가는 시간 상수 (초)
+var MERGE_GAP = 0.5;    // 이 시간(초) 안에 이어지는 충격은 하나의 사건
+
+var baseline = null, prevMag = null, prevT = null;
+var ev = null;          // 진행 중인 사건
+var lastDraw = 0;
+var pos = { lat: null, lon: null, acc: null, spd: null };
+var events = [];
+
+function onMotion(e) {
+  var a = e.accelerationIncludingGravity;
+  if (!a || a.x === null || a.y === null || a.z === null) { return; }
+
+  var t = performance.now() / 1000;
+  var mag = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+
+  if (baseline === null) { baseline = mag; prevMag = mag; prevT = t; return; }
+
+  var dt = t - prevT;
+  if (dt <= 0) { return; }
+
+  var dev = mag - baseline;
+  var jerk = Math.abs(mag - prevMag) / dt;
+  baseline += (mag - baseline) * (dt / (TAU + dt));   // 천천히 따라가는 평균
+  prevMag = mag;
+  prevT = t;
+
+  var thr = parseFloat($('thr').value) || 2.0;
+
+  if (Math.abs(dev) > thr) {
+    if (ev === null) {
+      ev = { start: t, last: t, peak: 0, maxJerk: 0,
+             lat: pos.lat, lon: pos.lon, acc: pos.acc, spd: pos.spd };
+    }
+    ev.last = t;
+    if (Math.abs(dev) > ev.peak) { ev.peak = Math.abs(dev); }
+  }
+  if (ev !== null) {
+    if (jerk > ev.maxJerk) { ev.maxJerk = jerk; }
+    if (t - ev.last > MERGE_GAP) { finishEvent(); }
+  }
+
+  if (t - lastDraw >= 0.15) {
+    lastDraw = t;
+    $('dev').textContent = Math.abs(dev).toFixed(2);
+  }
+}
+
+function finishEvent() {
+  var e = ev;
+  ev = null;
+  var spdKmh = (e.spd === null) ? null : e.spd * 3.6;
+
+  if ($('needspeed').checked && (spdKmh === null || spdKmh < 10)) { return; }
+
+  var jt = parseFloat($('jt').value) || 100;
+  var type = (e.maxJerk >= jt) ? 'pothole' : 'speed_bump';
+
+  var item = {
+    time: new Date().toISOString(),
+    type: type,
+    peak: Math.round(e.peak * 100) / 100,
+    jerk: Math.round(e.maxJerk),
+    lat: e.lat, lon: e.lon, acc: e.acc,
+    speed_kmh: (spdKmh === null) ? null : Math.round(spdKmh * 10) / 10,
+    cloud: ''
+  };
+  events.unshift(item);
+  sendToCloud(item);
+  render();
+}
+
+function render() {
+  $('n').textContent = events.length;
+  var html = '';
+  events.slice(0, 30).forEach(function (it) {
+    var label = (it.type === 'pothole') ? 'POTHOLE' : 'SPEED BUMP';
+    var cls = (it.type === 'pothole') ? 'pothole' : 'bump';
+    var gps = (it.lat === null) ? 'no GPS yet'
+      : it.lat.toFixed(5) + ', ' + it.lon.toFixed(5) + ' (\u00b1' + Math.round(it.acc) + ' m)';
+    var ccls = (it.cloud === 'sent') ? 'ok' : ((it.cloud.indexOf('failed') === 0) ? 'ng' : '');
+    html += '<div><span class="' + cls + '">' + (it.test ? 'TEST ' : '') + label + '</span> '
+      + it.time.substr(11, 8) + 'Z<br>'
+      + 'peak ' + it.peak + ' m/s\u00b2, jerk ' + it.jerk + '<br>' + gps + '<br>'
+      + 'cloud: <span class="' + ccls + '">' + it.cloud + '</span></div>';
+  });
+  $('events').innerHTML = html;
+}
+
+function onPosition(p) {
+  pos.lat = p.coords.latitude;
+  pos.lon = p.coords.longitude;
+  pos.acc = p.coords.accuracy;
+  pos.spd = p.coords.speed;
+  $('acc').textContent = Math.round(pos.acc);
+  $('spd').textContent = (pos.spd === null) ? '-' : (pos.spd * 3.6).toFixed(1);
+}
+
+$('clear').addEventListener('click', function () { events = []; render(); });
+
+$('test').addEventListener('click', function () {
+  var item = {
+    time: new Date().toISOString(),
+    type: 'pothole',
+    peak: 0, jerk: 0,
+    lat: pos.lat, lon: pos.lon, acc: pos.acc,
+    speed_kmh: (pos.spd === null) ? null : Math.round(pos.spd * 36) / 10,
+    test: true,
+    cloud: ''
+  };
+  events.unshift(item);
+  sendToCloud(item);
+  render();
+});
+
+$('start').addEventListener('click', function () {
+  $('log').textContent = '';
+
+  function startMotion() { window.addEventListener('devicemotion', onMotion); }
+
+  if (typeof DeviceMotionEvent !== 'undefined' &&
+      typeof DeviceMotionEvent.requestPermission === 'function') {
+    DeviceMotionEvent.requestPermission().then(function (state) {
+      if (state === 'granted') { startMotion(); }
+      else { $('log').textContent += 'Motion permission was denied. '; }
+    }).catch(function (err) {
+      $('log').textContent += 'Motion error: ' + err + ' ';
+    });
+  } else {
+    startMotion();
+  }
+
+  if (navigator.geolocation) {
+    navigator.geolocation.watchPosition(onPosition, function (err) {
+      $('log').textContent += 'GPS error: ' + err.message + ' ';
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+  } else {
+    $('log').textContent += 'GPS is not supported. ';
+  }
+});
+</script>
+</body>
+</html>
