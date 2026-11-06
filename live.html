@@ -47,6 +47,7 @@ var firebaseConfig = {
 var map = L.map('map');
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 19,
+  maxNativeZoom: 16,
   attribution: 'Tiles &copy; Esri'
 }).addTo(map);
 map.setView([36.5, 127.8], 7);
